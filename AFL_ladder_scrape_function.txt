@@ -1,0 +1,33 @@
+###afl fixture scrape
+
+   library(XML)
+   library(httr)
+   library(XML)
+   library(data.table)
+   library(caroline)
+   library(data.table)
+   
+   ########## 3  ############### 
+   url = GET("http://afltables.com/afl/seas/ladders/laddersyby.html")
+   mydata = readHTMLTable(rawToChar(url$content), stringsAsFactors = F)
+   current_format =  which(head(lapply(mydata , function(x) dim(x)[1])) == 18)  
+   current_table = which(lapply(mydata , function(x) sum(x == 'Â')) == 0)
+   select_elements = which(current_format %in% current_table)
+   last_year = 2016
+   years =  seq(last_year+1,((last_year+1) - length(select_elements) + 1),-1)
+   ladder_list = rep(list(matrix(NA, ncol = 3, nrow = 18)), length(select_elements))
+   for(i in 1:length(select_elements)){
+      ladder_list[[i]] = mydata[[select_elements[i]]][,c(1,24)] 
+      ladder_list[[i]][,3] = rep(years[i], length(ladder_list[[i]][,1]))
+   }
+   ladder_df = rbindlist(ladder_list)
+   ladder_df$Team = ifelse(substr(ladder_df$Team,1,1) == "*",substr(ladder_df$Team,2,30),ladder_df$Team)
+   ladder_df$Team = ifelse(ladder_df$Team == "Brisbane Lions","Brisbane",ifelse(ladder_df$Team == "Greater Western Sydney","GWS Giants",ladder_df$Team))
+   
+   names(ladder_df) = c('Home Team','Position','game_year')   
+   ladder_df$team_year = paste(ladder_df$`Home Team`,"_",ladder_df$game_year,sep = "")
+   ladder_df = ladder_df[,c(4,2)]
+
+   
+   
+   

@@ -1,0 +1,235 @@
+
+suppressMessages(library(tidytext));suppressMessages(library(dplyr));suppressMessages(library(twitteR));   suppressMessages(library(ROAuth));   suppressMessages(library(httr));   suppressMessages(library(lubridate));   suppressMessages(library(caroline));   suppressMessages(library(rtweet));suppressMessages(library(DBI));  suppressMessages(library(RSQLite)); suppressMessages(library(data.table));   suppressMessages(library(stringr));suppressMessages(library(RCurl));suppressMessages(library(tidyr));suppressMessages(library(igraph));suppressMessages(library(ggraph));suppressMessages(library(widyr));suppressMessages(library(tm));suppressMessages(library(tidytext));suppressMessages(library(methods));suppressMessages(library(ggmap));suppressMessages(library(stringr));suppressMessages(library(tidyverse));suppressMessages(library(rlang))
+
+##### Call twitter API #####
+ twitter_token <- create_token(app = "lets see how this goes desc",consumer_key = 	"vt1yhzs7IlBOM5ZbZESxwM30X",consumer_secret =	"AVtPQ69T8Y1ZSpniXaVzzWSXRmtU3cHnIFoqjF2QboIwrp2NVc")
+
+ ############### 
+ setwd("C:/Users/ChrisZ/Documents/Side Projects/Web Scraping Repository")
+ 
+ search = "EldersLimited"; tzone = "Australia/Adelaide";client = "Elders"
+# search_topic = "#agriculture"
+
+#For new twitter data - currently set to run every hour
+repeat {
+   con <- dbConnect(SQLite(), "Elders_twitter.sqlite")
+   tweets_post = search_tweets(search, n = 10000,retryOnRateLimit=200)
+   tweets_post$tweet_id = paste(tweets_post$user_id,"_",tweets_post$created_at,sep = "")
+   tweets_users = users_data(tweets_post)
+   tweets_post$Date_Time = with_tz(ymd_hms(tweets_post$created_at, tz = "UTC"), tzone = tzone);   tweets_post$Date = ymd(str_sub(tweets_post$Date_Time,1,10))
+   
+   db_check_exist_tweets = try(dbGetQuery(con, "SELECT user_id FROM Elders_Raw_tweets"),silent = TRUE)
+   if(class(db_check_exist_tweets) == "try-error"){
+      dbWriteTable(con, "Elders_Raw_tweets", tweets_post,overwrite = T)
+      dbWriteTable(con, "Elders_Users_raw", tweets_users,overwrite = T)
+   }
+   if(class(db_check_exist_tweets) != "try-error"){
+      dbWriteTable(con, "Elders_Raw_tweets", tweets_post,append = T)
+      dbWriteTable(con, "Elders_Users_raw", tweets_users,append = T)
+   }
+   tweets_raw =  dbGetQuery(con, "SELECT * FROM Elders_Raw_tweets")
+   user_raw = dbGetQuery(con, "SELECT * FROM Elders_Users_raw")
+   tweets_unique = unique(tweets_raw)
+   users_unique = unique(user_raw)
+   dbWriteTable(con, "Elders_Raw_tweets", tweets_unique,overwrite = T)
+   dbWriteTable(con, "Elders_Users_raw", users_unique,overwrite = T)
+   Sys.sleep(60*60)
+}
+
+
+#Refresh of analysis - currently set to run every day
+
+repeat{
+   #1.0 Load required packages
+   suppressMessages(library(tidytext));suppressMessages(library(dplyr));suppressMessages(library(twitteR));   suppressMessages(library(ROAuth));   suppressMessages(library(httr));   suppressMessages(library(lubridate));   suppressMessages(library(caroline));   suppressMessages(library(rtweet));suppressMessages(library(DBI));  suppressMessages(library(RSQLite)); suppressMessages(library(data.table));   suppressMessages(library(stringr));suppressMessages(library(RCurl));suppressMessages(library(tidyr));suppressMessages(library(igraph));suppressMessages(library(ggraph));suppressMessages(library(widyr));suppressMessages(library(tm));suppressMessages(library(tidytext));suppressMessages(library(methods));suppressMessages(library(ggmap));suppressMessages(library(stringr));suppressMessages(library(tidyverse));suppressMessages(library(rlang))
+   #2.0 Pull data from database to run analysis on tweets
+   con <- dbConnect(SQLite(), "Elders_twitter.sqlite")
+   tweets_raw = dbGetQuery(con, "SELECT * FROM Elders_Raw_tweets");users_raw = dbGetQuery(con, "SELECT * FROM Elders_Users_raw")   
+   #2.1 Clean selected data to ensure no duplciation of data, correct class of fields etc
+   tweets_raw$Date_Time = as.POSIXlt(tweets_raw$Date_Time, origin="1970-01-01")
+   tweets = unique(tweets_raw);users = unique(users_raw)
+   users$description = str_replace_all(users$description, "[\r\n]" , "");users$created_at = as.POSIXlt(users$created_at, origin="1970-01-01")
+   tweets$text = str_replace_all(tweets$text, "[\r\n]" , "");tweets$text = str_replace(tweets$text,"&amp;","&");tweets$text = str_replace(tweets$text,"&amp;","&")
+   #3.0 Take user information and extract geo location 
+   geocode_prep = function(tweets, users){
+      suppressMessages(library(dplyr)); suppressMessages(library(DBI));  suppressMessages(library(RSQLite));suppressMessages(library(stringr));suppressMessages(library(ggraph));suppressMessages(library(ggmap));suppressMessages(library(stringr))
+      db_check_loc = try(dbGetQuery(con, "SELECT user_id FROM Location_IDs"),silent = TRUE)
+      db_check_tz = try(dbGetQuery(con, "SELECT user_id FROM Time_Zone_IDs"),silent = TRUE)
+      if(class(db_check_tz) == "try-error"){
+         users_tz = unique(users[ ,"time_zone"])
+         users_tz = data.frame(time_zone = na.omit(users_tz));users_tz$time_zone = as.character(users_tz$time_zone)
+         tz_lon_lat = geocode(users_tz$time_zone)
+         users_tz$lon = tz_lon_lat$lon
+         users_tz$lat = tz_lon_lat$lat
+         dbWriteTable(con, "Time_Zone_IDs", users_tz,overwrite = T)
+      }
+      if(class(db_check_tz) != "try-error"){
+         TimeZone_IDs = dbGetQuery(con, "SELECT * FROM Time_Zone_IDs")
+         users_tz = unique(users[ ,"time_zone"])
+         users_tz = data.frame(time_zone = na.omit(users_tz));users_tz$time_zone = as.character(users_tz$time_zone)
+         users_tz_new = anti_join(users_tz,TimeZone_IDs)
+         if(nrow(users_tz_new) != 0){
+            tz_lon_lat_new = geocode(users_tz_new$time_zone) 
+            users_tz_new$lon = tz_lon_lat_new$lon    
+            users_tz_new$lat = tz_lon_lat_new$lat             
+            dbWriteTable(con, "Time_Zone_IDs", users_tz,append = T)
+         }
+      }
+      if(class(db_check_loc) == "try-error"){
+         users_location = unique(users[ ,c("user_id","location")])
+         users_location = na.omit(users_location)
+         users_long_lat = geocode(users_location$location)
+         users_location$lon = users_long_lat$lon
+         users_location$lat = users_long_lat$lat
+         dbWriteTable(con, "Location_IDs", users_tz,overwrite = T)
+      }
+      if(class(db_check_loc) != "try-error"){   
+         Location_IDs = dbGetQuery(con, "SELECT * FROM Location_IDs")
+         users_location = unique(users[ ,c("user_id","location")])
+         users_location = na.omit(users_location);names(users_location) = c("user_id","location")
+         users_location_new = anti_join(users_location,Location_IDs)
+         if(nrow(users_tz_new) != 0){
+            location_lon_lat_new = geocode(users_location_new$location) 
+            users_location_new$lon = tz_lon_lat_new$lon    
+            users_location_new$lat = tz_lon_lat_new$lat  
+            dbWriteTable(con, "Location_IDs", users_location_new,append = T)
+         }
+      }
+   }      
+   geocode_prep(tweets,users)
+   
+   #3.0 Extract information for word cloud, taking out stop words. Also apply analysis on hastags and mentions
+   tweet_token <- function(data) {
+      data(stop_words)
+      tweets_words = data[,c("text","tweet_id")]
+      mentions = data[,c("mentions_screen_name","tweet_id")]
+      hashtags = data[,c("hashtags","tweet_id")]
+      tweet_words = tweets_words %>%
+         unnest_tokens(word, text)
+      tweet_mentions = mentions %>%
+         unnest_tokens(word, mentions_screen_name)
+      tweet_hashtags = hashtags %>%
+         unnest_tokens(word, hashtags)
+      tweet_mentions = na.omit(tweet_mentions)
+      tweet_hashtags = na.omit(tweet_hashtags)
+      twitter_stop_words = data.frame(word = c("https","t.co","ufqyrmqwuh","rt","82ejseumye"), lexicon = rep("CZ", length(word)))    
+      twitter_stop_words$word = as.character(twitter_stop_words$word);twitter_stop_words$lexicon = as.character(twitter_stop_words$lexicon)
+      stop_words_new = rbind(stop_words, twitter_stop_words)
+      tweet_words_wo_stop = anti_join(tweet_words,stop_words_new)
+      write.delim(tweet_words_wo_stop,'tweet_words_wo_stop.txt', sep = "|")
+      write.delim(tweet_mentions,'tweet_mentions.txt', sep = "|")
+      write.delim(tweet_hashtags,'tweet_hashtags.txt', sep = "|")
+   }
+   tweet_token(tweets)
+   #3.1 Apply sentiment analysis over tweets.
+   tweet_sentiment = function(data){
+      nrc = get_sentiments("nrc")
+      data(stop_words)
+      tweets = data[,c("text","tweet_id")]
+      sentiment_scores <<- sentiment_by(data$text)
+      tweets_unique$sentiment_score = sentiment_scores$sentiment
+      tweet_words = tweets %>%
+         unnest_tokens(word, text)
+      twitter_stop_words = data.frame(word = c("https","t.co","ufqyrmqwuh","rt","82ejseumye"), lexicon = rep("CZ", length(word)))    
+      twitter_stop_words$word = as.character(twitter_stop_words$word);twitter_stop_words$lexicon = as.character(twitter_stop_words$lexicon)
+      stop_words_new = rbind(stop_words, twitter_stop_words)
+      tweet_words_wo_stop = anti_join(tweet_words,stop_words_new)
+      tweet_words_sentiment = left_join(tweet_words_wo_stop,nrc) 
+      tweet_words_sentiment = na.omit(tweet_words_sentiment)
+      write.delim(tweet_words_sentiment,'tweet_words_sentiment.txt', sep = "|")
+   }	
+   tweet_sentiment(tweets)
+   #3.2 Cluster analysis
+   cluster_user = function(data,y){
+      cluster_data = unique(data[,c("user_id","followers_count","friends_count","listed_count","favourites_count","statuses_count")])
+      cluster_select = function(data,y, scale_data = NULL,max_clusters = 15, ...){
+         if(!is.null(scale_data))   {   
+            data = scale(data)
+         }
+         data = data[,-y]
+         ##################### K MEANS ##########################################
+         wss <- (nrow(data)-1)*sum(apply(data,2,var))
+         for (i in 2:max_clusters) wss[i] <- sum(kmeans(data,centers=i)$betweenss/kmeans(data,centers=i)$totss)
+         wss[1] = 0
+         drop = rep(NA,length(wss) -1)
+         drop[1] = 0.1
+         for(i in 2:(length(wss)-1))   drop[i] <- round((wss[i+1] - wss[i])/wss[i],3)
+         neg_drop = which(drop< 0.05)
+         kmeans_cluster_selection = sprintf("The optimal number of cluster is %i for kmeans", neg_drop[1])
+         ##################### Partioning around medoids ########################
+         suppressMessages(library(fpc))
+         pamk_best = pamk(data, criterion = "ch")
+         medoids_cluster_selection = sprintf("The optimal number of clusters is %i for medoids", pamk_best$nc)
+         ##################### Calinkski ########################################
+         suppressMessages(library(vegan))
+         calinski_fit = cascadeKM(data, 1,max_clusters)
+         calinski_cluster_selection =  sprintf("The optimal number of clusters is %i for calinski", as.numeric(which.max(calinski_fit$results[2,])))     
+         ##################### BIC, parameterised gaussian mixture model ########
+         suppressMessages(library(mclust))
+         BIC_fit = Mclust(as.matrix(data), G=1:max_clusters)
+         BIC_cluster_selection =  sprintf("The optimal number of clusters is %i for BIC", dim(BIC_fit$z)[2])     
+         ##################### Affinity proporgation (AP) #######################
+         suppressMessages(library(apcluster))
+         ap_fit <- apcluster(negDistMat(r=2), data)
+         AP_cluster_selection =  sprintf("The optimal number of clusters is %i for AP", length(ap_fit@clusters))     
+         ##################### Gap statistic ####################################
+         suppressMessages(library(cluster))
+         gapstat_fit = suppressMessages(clusGap(data, kmeans, max_clusters, B = 100, verbose = interactive()))
+         ##################### nb clust ####################################   
+         suppressMessages(library(NbClust))  
+         nb_kmeans_fit <- NbClust(data,  distance = "euclidean", 
+                                  min.nc=2, max.nc=max_clusters, method = "kmeans", 
+                                  index = "kl" , alphaBeale = 0.1)
+         nb_ward_fit <- NbClust(data,  distance = "euclidean", 
+                                min.nc=2, max.nc=max_clusters, method = "ward.D", 
+                                index = "kl", alphaBeale = 0.1)
+         nb_kmeans_cluster_selection =  sprintf("The optimal number of clusters is %i for nb kmeans", as.numeric(names(sort(table(as.vector(nb_kmeans_fit$Best.nc[1])),decreasing=TRUE)[1])))     
+         nb_ward_cluster_selection =  sprintf("The optimal number of clusters is %i for nb ward", as.numeric(names(sort(table(as.vector(nb_ward_fit$Best.nc[1])),decreasing=TRUE)[1])))     
+         ##################### Cluster selection ###########################
+         Cluster_method = c('kmeans', 'medoids','calinski','BIC','AP','Nb kmeans', 'Nb ward')
+         Cluster_result <<- c(neg_drop[1], pamk_best$nc,as.numeric(which.max(calinski_fit$results[2,])),dim(BIC_fit$z)[2],length(ap_fit@clusters),as.numeric(names(sort(table(as.vector(nb_kmeans_fit$Best.nc[1])),decreasing=TRUE)[1])),as.numeric(names(sort(table(as.vector(nb_ward_fit$Best.nc[1])),decreasing=TRUE)[1])))
+         Cluster_results = data.frame(Cluster_method,Cluster_result)
+         results_table = table(as.vector(Cluster_result))
+         max_result = max(results_table)
+         Optimal_clusters =  sprintf("The optimal number of clusters is %i across all models checked above", as.numeric(names(which(results_table == max_result))))
+         Median_clusters =  sprintf("The median number from all cluster methods run is %i ", median(Cluster_result))
+         Results = list(Cluster_results = Cluster_results, Optimal_clusters = Optimal_clusters,Median_clusters = Median_clusters)
+         ifelse(length(as.numeric(names(which(results_table == max_result)))) == 6,"No optimal cluster selected",print(Results))
+         k_search = median(Cluster_result)
+         library(skmeans)
+         data = as.matrix(data)
+         cluster_skmeans <<- skmeans(data,k_search)   
+         cluster_results <<- as.vector(cluster_skmeans$cluster)
+      }   
+      cluster_select(cluster_data,y)
+   }
+   cluster_user(user,1)
+   
+   #4.0 Aggregate all key variables to run extract
+   write.delim(dbGetQuery(con, "SELECT * FROM Location_IDs"),'Location_Geos.txt', sep = "|")
+   write.delim(dbGetQuery(con, "SELECT * FROM Time_Zone_IDs"),'Location_Geos.txt', sep = "|")
+   tweets$sentiment_scores = sentiment_scores$ave_sentiment
+   users$cluster = cluster_results
+   tweet_names = c("screen_name","user_id","status_id","text","retweet_count","favorite_count","is_retweet","retweet_status_id","in_reply_to_status_status_id","in_reply_to_status_user_id","in_reply_to_status_screen_name","in_reply_to_status_screen_name","mentions_screen_name","mentions_user_id","hashtags","tweet_id","Date_Time")
+   user_names = c("user_id","name","screen_name","location","description","protected","followers_count","friends_count","listed_count","created_at","favourites_count","time_zone","statuses_count")
+   tweets_final = tweets[,names(tweets) %in% tweet_names]
+   user_final = users[,names(users) %in% user_names]
+   write.delim(tweets,'tweets.txt', sep = "|")
+   write.delim(users,'users.txt', sep = "|")
+   Sys.sleep(60*60*24)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
