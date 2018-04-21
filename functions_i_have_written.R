@@ -16,6 +16,7 @@ plot.nas = function(data, nom = T, top = 5) {
   res.mat = matrix(NA, ncol = 2, nrow = top)
   res.mat[,1] = names(data[,order(sum.nas, decreasing =T)[1:top]])
   res.mat[,2] = as.numeric(sum.nas[order(sum.nas, decreasing =T)[1:top]]) 
+  res.mat = res.mat[res.mat[,2] != 0,]
   print(res.mat)
   res.mat <<- res.mat
 }  
@@ -312,8 +313,8 @@ train.test.reg = function(data, y,samp= 0.7 ) {
   test.x = data[-train_ind, -y] 
   test.y = as.vector(data.frame(data[-train_ind, ]))
   test.y = as.vector(test.y[,y])
-  Formula = formula(paste(y.vars,sep="~",
-                          paste(x.vars, collapse = " + ")))
+#  Formula = formula(paste(y.vars,sep="~",
+#                          paste(x.vars, collapse = " + ")))
   assign('trainer', trainer, envir = globalenv())
   assign('trainer', trainer, envir = globalenv())
   assign('tester', tester, envir = globalenv())
@@ -321,7 +322,7 @@ train.test.reg = function(data, y,samp= 0.7 ) {
   assign('train.y', train.y, envir = globalenv())
   assign('test.x', test.x, envir = globalenv())
   assign('test.y', test.y, envir = globalenv())
-  assign('Formula', Formula, envir = globalenv())
+#  assign('Formula', Formula, envir = globalenv())
 }
 ######################################################
 train.test.class = function(data, y,samp= 0.7,equalsplit = F) {
@@ -1170,7 +1171,7 @@ footy_scrape = function(start,end){
                 }     
           v_results_final = rbindlist(v_results_final_list)
           names(v_results_final) = field_names
-          v_results_final[v_results_final == "Â"] <- 0
+          v_results_final[v_results_final == "Ã‚"] <- 0
           player_stats <<- v_results_final
    }    
 ## End     
@@ -1868,7 +1869,7 @@ head(as.numeric(sapply(strsplit(player_info$Seasons,",",fixed = T), `[`, 2)))
 url = GET("http://afltables.com/afl/seas/ladders/laddersyby.html")
 mydata = readHTMLTable(rawToChar(url$content), stringsAsFactors = F)
 current_format =  which(head(lapply(mydata , function(x) dim(x)[1])) == 18)  
-current_table = which(lapply(mydata , function(x) sum(x == 'Â')) == 0)
+current_table = which(lapply(mydata , function(x) sum(x == 'Ã‚')) == 0)
 select_elements = which(current_format %in% current_table)
 
 mtcars[order(mtcars$mpg,decreasing = T),]
@@ -1917,7 +1918,7 @@ observation_level_variable_importance <- function(train_data, live_data, outcome
    xgb_model <- xgb.train ( params = param,
                             data = dtrain,
                             eval_metric = "auc",
-                            nrounds = max_rounds,
+                            nrounds = 3000,
                             missing=NaN,
                             verbose = 1,
                             print_every_n = 10,
@@ -2063,7 +2064,7 @@ for(i in 1:length(b_filter_temp2$web_id)){
    v_df2[[1]] = left_join(v_df2[[1]],home_data)
    v_df2[[2]] = left_join(v_df2[[2]],away_data)
    v_df5 = rbindlist(v_df2)
-   v_all = left_join(v_df5,v_df4);v_all[v_all == "Â"] <- 0
+   v_all = left_join(v_df5,v_df4);v_all[v_all == "Ã‚"] <- 0
    db_afl = "AFLData"
    db_afl_statement = paste("SELECT * FROM ",db_afl,sep = "")
    db_check_exist = try(dbGetQuery(con, db_afl_statement),silent = TRUE)
@@ -2111,5 +2112,204 @@ qtr_results <- unlist(sapply(qtr_data, function(x) percent_rank(x$cum_cash)))
 qtr_df = rbindlist(qtr_data);qtr_df$percentile = qtr_results
 qtr_df$top_80 = ifelse(qtr_df$percentile >= 0.8,1,0)
 
+
+library(sparklyr);library(dplyr)
+Sys.setenv(JAVA_HOME='C:\\Program Files\\Java\\jdk1.8.0_45') # For sendmailR
+java_path <- normalizePath('C:/Program Files/Java/jdk1.8.0_131')
+Sys.setenv(JAVA_HOME=java_path)
+sc <- spark_connect(master = "local")
+
+
+cluster_select_v2 = function(data,y, var_cols, scale_data = NULL,max_clusters = 15,zero_val = T, ...){
+   library(skmeans);library(caroline)
+   if(!is.null(scale_data)){   
+      data = scale(data)
+   }
+   if(zero_val == T){
+      cluster_other = data[apply(data[,var_cols], 1, function(x) var(x)) == 0,]
+      cluster_all = data[apply(data[,var_cols], 1, function(x) var(x)) != 0,]  
+      cluster_data = cluster_all[,-y]
+   }
+   cluster_all = data[apply(data[,var_cols], 1, function(x) var(x)) != 0,]  
+   cluster_data = cluster_all[,-y]
+   ##################### K MEANS ##########################################
+   wss <- (nrow(cluster_data)-1)*sum(apply(cluster_data,2,var))
+   for (i in 2:max_clusters) wss[i] <- sum(kmeans(cluster_data,centers=i)$betweenss/kmeans(cluster_data,centers=i)$totss)
+   wss[1] = 0
+   drop = rep(NA,length(wss) -1)
+   drop[1] = 0.1
+   for(i in 2:(length(wss)-1))   drop[i] <- round((wss[i+1] - wss[i])/wss[i],3)
+   neg_drop = which(drop< 0.05)
+   kmeans_cluster_selection = sprintf("The optimal number of cluster is %i for kmeans", neg_drop[1])
+   Cluster_method = 'kmeans'
+   Cluster_result <<- neg_drop[1]
+   Cluster_results = data.frame(Cluster_method,Cluster_result)
+   results_table = table(as.vector(Cluster_result))
+   max_result = max(results_table)
+   Optimal_clusters =  sprintf("The optimal number of clusters is %i across all models checked above", as.numeric(names(which(results_table == max_result))))
+   Results = list(Cluster_results = Cluster_results, Optimal_clusters = Optimal_clusters)
+   k_search = median(Cluster_result)
+   mat_data = as.matrix(cluster_data)
+   cluster_skmeans <<- skmeans(mat_data,k_search)
+   if(zero_val == T) {
+      cluster_var_results = data.frame(Employee_ID = cluster_all$EMPLOYEE_ID,Cluster =  as.vector(cluster_skmeans$cluster))
+      last_cluster = max(cluster_var_results$Cluster)
+      cluster_novar_results = data.frame(Employee_ID = cluster_other$EMPLOYEE_ID,Cluster =  rep(last_cluster+1, nrow(cluster_other)))
+      cluster_all_results = rbind(cluster_var_results,cluster_novar_results)
+   }
+   cluster_all_results = data.frame(Employee_ID = cluster_all$EMPLOYEE_ID,Cluster =  as.vector(cluster_skmeans$cluster))
+   write.delim(cluster_all_results,'cluster_results.txt',sep = "|")
+}  
+
+
+library(taskscheduleR)
+myscript = system.file("extdata", "payer_stats.R", package = "taskscheduleR")
+taskscheduler_create(taskname = "extracts", rscript = myscript,
+                     schedule = "MINUTE") 
+system.file("extdata", "payers_stats.log", package = "taskscheduleR")
+
+mylog <- system.file("extdata", "payer_stats.log", package = "taskscheduleR")
+cat(readLines(mylog), sep = "\n")  
+
+sender <- "christopher.zucchet@gmail.com"
+recipients <- c("chris.zucchet@pwc.com")
+send.mail(from = sender,
+          to = recipients,
+          subject = "Subject of the email",
+          body = "Body of the email",
+          smtp = list(host.name = "smtp.gmail.com",  
+                      user.name = "christopher.zucchet@gmail.com",            
+                      passwd = "1036athl", ssl = TRUE),
+          authenticate = TRUE,
+          send = TRUE)
+
+
+sendmail(from=from,to=to,subject=subject,msg=body,control=mailControl)
+find.java <- function() {
+   for (root in c("HLM", "HCU")) for (key in c("Software\\JavaSoft\\Java Runtime Environment", 
+                                               "Software\\JavaSoft\\Java Development Kit")) {
+      hive <- try(utils::readRegistry(key, root, 2), 
+                  silent = TRUE)
+      if (!inherits(hive, "try-error")) 
+         return(hive)
+   }
+   hive
+}
+
+sender <- "christopher.zucchet@gmail.com" # Replace with a valid address
+recipients <- c("chris.zucchet@pwc.com") # Replace with one or more valid addresses
+email <- send.mail(from = sender,
+                   to = recipients,
+                   subject="Subject of the email",
+                   body = "Body of the email",
+                   smtp = list(host.name = "aspmx.l.google.com", port = 25),
+                   authenticate = FALSE,
+                   send = FALSE)
+
+
+
+data %>%
+   summarise_if( is.numeric, e1071::skewness )
+
+
+iris %>% as_tibble() %>% mutate_if(is.factor, as.character)
+
+
+require(corrplot) 
+
+correlations = cor( select_if( data, is.numeric )  )  
+
+corrplot(correlations, method = 'number', order = 'hclust')  
+
+
+a = recipe(medv~., data = BostonHousing)
+
+basic = recipe(data = BostonHousing,medv~.) %>%
+   step_scale(all_numeric(),-chas) 
+   prep(basic, training = BostonHousing)
+
+bake(basic, BostonHousing) 
+
+
+sum_old = BostonHousing %>%
+   summarise_if( is.numeric, e1071::skewness ) %>%
+   mutate( BostonHousing = 'untransformed') %>%
+   select( BostonHousing, everything() )
+
+bake(basic, newdata = BostonHousing)
+
+cs_data = cleanest_data %>%
+   filter(cleanest_data$state %in% c("failed","canceled","successful")) %>%
+   mutate(camp_len_days =  as.numeric(round(difftime(cs_data$deadline,cs_data$launched),2))) %>%
+   filter(camp_len_days <= 10000) %>%
+   filter(goal <= 10000000)%>%
+   select(-one_of(c("ID","name","pledged","usd.pledged","backers")))
+
+rec_obj = recipe(state~., data = cs_data) %>%
+   step_other(category,main_category,currency,threshold = 0.02) %>%
+   step_other(country,threshold = 0.005) %>%
+   step_dummy(country,currency)%>%
+   step_date(launched)%>%
+   #   step_num2factor(deadline_year)%>%
+   step_dummy(launched_dow,launched_month)%>%
+   step_log(goal)%>%
+   step_center(camp_len_days,goal) %>%
+   step_scale(camp_len_days,goal) %>%
+   prep(data = cs_data)
+
+x_train_tbl <- bake(rec_obj, newdata = cs_data) %>% select(-category,-main_category,-deadline,-launched,-state)
+x_test_tbl  <- bake(rec_obj, newdata = cs_data) %>% select(-state) 
+y_train_vec <- bake(rec_obj, newdata = cs_data) %>% select(state) 
+y_test_vec  <- bake(rec_obj, newdata = cs_data) %>% select(state) 
+
+cs_data %>%
+   select(state, goal) %>%
+   mutate(
+      state = state %>% as.factor() %>% as.numeric(),
+      LogCamp = log(goal)
+   ) %>%
+   correlate() %>%
+   focus(state) %>%
+   fashion()
+
+
+xgb.data.train <- xgb.DMatrix(as.matrix(train[, colnames(train) != "Class"]), label = train$Class)
+
+xgb.bench.acc = microbenchmark(
+   xgb.model.acc <- xgb.train(data = xgb.data.train
+                              , params = list(objective = "binary:logistic", eta = 0.1
+                                              , max.depth = 7, min_child_weight = 100
+                                              , subsample = 1, colsample_bytree = 1
+                                              , nthread = 3, eval_metric = "auc"
+                              )
+                              , watchlist = list(test = xgb.data.test), nrounds = 500
+                              , early_stopping_rounds = 40, print_every_n = 20
+   )
+   , times = 5L
+)
+print(xgb.bench.acc)
+print(xgb.model.acc$bestScore)
+
+#Get feature importance
+xgb.feature.imp = xgb.importance(model = xgb.model.acc)
+
+# Make predictions on test set for ROC curve
+xgb.test.acc = predict(xgb.model.acc
+                       , newdata = as.matrix(test[, colnames(test) != "Class"])
+                       , ntreelimit = xgb.model.acc$bestInd)
+auc.xgb.acc = roc(test$Class, xgb.test.acc, plot = TRUE, col = "blue")
+print(auc.xgb.acc)  
+
+rm(list=ls())
+
+
+watchlist <- list(train=dtrain, test=dtest)
+bstdiff <- xgb.train(data=dtrain, max.depth=5, 
+                     booster = "gblinear", nthread = 5, 
+                     nrounds = 1000,
+                     early_stopping_rounds = 50,
+                     gamma = 1,
+                     watchlist=watchlist, objective = "binary:logistic", verbose = 2)
+xgb.save(bstdiff, "model_xgboost_afl")
 
 
